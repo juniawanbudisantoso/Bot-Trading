@@ -2,11 +2,13 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Auto Trading Bot PRO FINAL</title>
+<title>AI TRADING SYSTEM LEVEL C</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
 body { font-family: Arial; background:#0b132b; color:white; text-align:center; }
-button { padding:15px; margin:10px; width:80%; border-radius:10px; border:none; font-size:18px; }
+button { padding:15px; margin:10px; width:85%; border-radius:10px; border:none; font-size:18px; }
 .card { background:#1c2541; padding:15px; margin:10px; border-radius:10px; }
 .buy { color:lime; }
 .sell { color:red; }
@@ -16,7 +18,7 @@ button { padding:15px; margin:10px; width:80%; border-radius:10px; border:none; 
 
 <body>
 
-<h1>🚀 Auto Trading Bot PRO FINAL</h1>
+<h1>🤖 AI TRADING SYSTEM</h1>
 <p id="status">Status: OFF</p>
 
 <button onclick="startBot()">START BOT</button>
@@ -24,108 +26,208 @@ button { padding:15px; margin:10px; width:80%; border-radius:10px; border:none; 
 
 <div id="output"></div>
 
-<h2>📊 Equity Curve</h2>
-<canvas id="chart" height="200"></canvas>
+<h3>📊 Equity Curve</h3>
+<canvas id="chart"></canvas>
 
-<h2>📊 Result</h2>
+<h3>📈 Result</h3>
 <div id="result"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
 <script>
-let running = false;
 
-// 🔥 FETCH PRICE (ANTI ERROR)
-async function fetchPrice(symbol){
-  try {
-    let res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`);
-    let data = await res.json();
-    return parseFloat(data.price);
-  } catch(e){
-    // fallback kalau gagal
-    return Math.random() * 50000 + 1000;
+// ===== AI MODEL =====
+let MODEL = {
+  w: [0.5, -0.3, 0.2, 0.1], // weights
+  lr: 0.01
+};
+
+// ===== FETCH DATA =====
+async function fetchOHLC(symbol){
+  let res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=200`);
+  let data = await res.json();
+  return data.map(c => ({
+    close: parseFloat(c[4]),
+    high: parseFloat(c[2]),
+    low: parseFloat(c[3])
+  }));
+}
+
+// ===== INDICATORS =====
+function ema(data,p){
+  let k=2/(p+1), e=data[0];
+  return data.map(v=>e=v*k+e*(1-k));
+}
+
+function rsi(data,p=14){
+  let g=0,l=0;
+  for(let i=1;i<p;i++){
+    let d=data[i]-data[i-1];
+    if(d>0) g+=d; else l-=d;
+  }
+  g/=p; l/=p;
+  let rs=g/(l||1);
+  return 100-(100/(1+rs));
+}
+
+function atr(data){
+  let sum=0;
+  for(let i=1;i<data.length;i++){
+    sum+=Math.abs(data[i].high-data[i].low);
+  }
+  return sum/data.length;
+}
+
+// ===== FEATURE ENGINEERING =====
+function features(data){
+
+  let closes = data.map(x=>x.close);
+
+  let ema9 = ema(closes,9).at(-1);
+  let ema21 = ema(closes,21).at(-1);
+
+  let r = rsi(closes);
+  let vol = atr(data);
+
+  let trend = ema9 - ema21;
+
+  return [
+    trend/100,
+    (r-50)/50,
+    vol/100,
+    closes.at(-1)/10000
+  ];
+}
+
+// ===== AI PREDICT =====
+function predict(x){
+  let z = MODEL.w.reduce((s,w,i)=>s+w*x[i],0);
+  return 1/(1+Math.exp(-z)); // sigmoid
+}
+
+// ===== AI LEARNING =====
+function train(x, y){
+  let p = predict(x);
+  let error = y - p;
+
+  for(let i=0;i<MODEL.w.length;i++){
+    MODEL.w[i] += MODEL.lr * error * x[i];
   }
 }
 
-// 🔥 ANALYZE (SIMPLE STRATEGY)
-function analyze(){
-  let r = Math.random();
-
-  if(r > 0.65) return "BUY";
-  if(r < 0.35) return "SELL";
+// ===== DECISION =====
+function decide(p){
+  if(p > 0.6) return "BUY";
+  if(p < 0.4) return "SELL";
   return "WAIT";
 }
 
-// 🚀 START BOT
-function startBot(){
+// ===== LIVE BOT =====
+let running = false;
+
+async function startBot(){
   running = true;
-  document.getElementById("status").innerText = "Status: RUNNING 🚀";
-  run();
-}
+  document.getElementById("status").innerText = "RUNNING 🤖";
 
-// 🔁 LOOP BOT
-async function run(){
-  if(!running) return;
+  while(running){
 
-  let symbols = ["BTCUSDT","ETHUSDT"];
-  let html = "";
+    let symbols = ["BTCUSDT","ETHUSDT"];
+    let html = "";
 
-  for(let s of symbols){
-    let price = await fetchPrice(s);
-    let signal = analyze();
+    for(let s of symbols){
 
-    let cls = signal=="BUY"?"buy":signal=="SELL"?"sell":"wait";
+      let data = await fetchOHLC(s);
+      let x = features(data);
+      let p = predict(x);
+      let signal = decide(p);
+      let price = data.at(-1).close;
 
-    html += `
+      let cls = signal=="BUY"?"buy":signal=="SELL"?"sell":"wait";
+
+      html += `
       <div class="card">
         <b>${s}</b><br>
         <span class="${cls}">${signal}</span><br>
-        Price: ${price.toFixed(2)}
-      </div>
-    `;
-  }
-
-  document.getElementById("output").innerHTML = html;
-
-  setTimeout(run, 5000);
-}
-
-// 📊 BACKTEST + SIMULASI PROFIT
-function runBacktest(){
-  let balance = 1000;
-  let history = [balance];
-  let win = 0;
-  let total = 50;
-
-  for(let i=0;i<total;i++){
-    let r = Math.random();
-
-    if(r > 0.55){
-      balance *= 1.03; // profit
-      win++;
-    } else {
-      balance *= 0.97; // loss
+        Prob: ${p.toFixed(2)}<br>
+        Price: ${price}
+      </div>`;
     }
 
-    history.push(balance);
+    document.getElementById("output").innerHTML = html;
+
+    await new Promise(r=>setTimeout(r,4000));
+  }
+}
+
+// ===== BACKTEST =====
+async function runBacktest(){
+
+  let data = await fetchOHLC("BTCUSDT");
+
+  let balance = 1000;
+  let equity = [balance];
+
+  let wins=0, total=0;
+
+  for(let i=50;i<data.length-1;i++){
+
+    let slice = data.slice(i-50,i);
+    let x = features(slice);
+    let p = predict(x);
+    let signal = decide(p);
+
+    let entry = data[i].close;
+    let next = data[i+1].close;
+
+    let y = 0;
+
+    if(signal=="BUY"){
+      total++;
+      if(next > entry){
+        balance *= 1.02;
+        wins++;
+        y = 1;
+      } else {
+        balance *= 0.98;
+        y = 0;
+      }
+    }
+
+    if(signal=="SELL"){
+      total++;
+      if(next < entry){
+        balance *= 1.02;
+        wins++;
+        y = 1;
+      } else {
+        balance *= 0.98;
+        y = 0;
+      }
+    }
+
+    // TRAIN AI
+    train(x, y);
+
+    equity.push(balance);
   }
 
-  let winrate = (win/total*100).toFixed(2);
+  let winrate = (wins/total*100).toFixed(2);
 
   document.getElementById("result").innerHTML =
-    `Balance: $${balance.toFixed(2)}<br>Winrate: ${winrate}%`;
+    `Balance: $${balance.toFixed(2)}<br>Winrate: ${winrate}%<br>Trades: ${total}`;
 
-  new Chart(document.getElementById("chart"), {
-    type: 'line',
-    data: {
-      labels: history.map((_,i)=>i),
-      datasets: [{
-        label: 'Equity',
-        data: history
-      }]
+  drawChart(equity);
+}
+
+// ===== CHART =====
+function drawChart(data){
+  new Chart(document.getElementById("chart"),{
+    type:"line",
+    data:{
+      labels:data.map((_,i)=>i),
+      datasets:[{label:"Equity",data:data}]
     }
   });
 }
+
 </script>
 
 </body>
