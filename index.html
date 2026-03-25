@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auto Trading Bot PRO FIX</title>
+
+<style>
+body { font-family: Arial; background:#0f172a; color:white; padding:15px; }
+.card { background:#1e293b; padding:15px; margin-bottom:10px; border-radius:12px; }
+.buy { color:#22c55e; }
+.wait { color:#eab308; }
+button { padding:12px; width:100%; margin-top:10px; border:none; border-radius:10px; font-weight:bold; }
+canvas { background:#111827; margin-top:10px; border-radius:10px; }
+</style>
+</head>
+
+<body>
+
+<h2> Auto Trading Bot PRO FIX</h2>
+<p id="status">Status: OFF</p>
+
+<button onclick="startBot()">START BOT</button>
+<button onclick="runBacktest()">RUN BACKTEST</button>
+
+<p id="loading"></p>
+
+<h3> Equity Curve</h3>
+<canvas id="chart" width="350" height="200"></canvas>
+
+<h3> Result</h3>
+<div id="result"></div>
+
+<script>
+
+let running = false;
+
+// === EMA ===
+function ema(data, p) {
+  let k = 2/(p+1), e = data[0];
+  return data.map(v => e = v*k + e*(1-k));
+}
+
+// === RSI ===
+function rsi(data, p=14) {
+  let g=0,l=0;
+  for(let i=1;i<=p;i++){
+    let d=data[i]-data[i-1];
+    d>0?g+=d:l-=d;
+  }
+  let ag=g/p, al=l/p;
+  for(let i=p+1;i<data.length;i++){
+    let d=data[i]-data[i-1];
+    let gain=Math.max(d,0), loss=Math.max(-d,0);
+    ag=(ag*(p-1)+gain)/p;
+    al=(al*(p-1)+loss)/p;
+  }
+  let rs=ag/al;
+  return 100-(100/(1+rs));
+}
+
+// === ANALYZE ===
+function analyze(data) {
+  if (data.length < 210) return "WAIT";
+
+  const closes = data.map(d => d.close);
+
+  const ema9 = ema(closes,9).at(-1);
+  const ema21 = ema(closes,21).at(-1);
+  const ema50 = ema(closes,50).at(-1);
+  const ema200 = ema(closes,200).at(-1);
+  const r = rsi(closes);
+
+  if (ema50 > ema200 && ema9 > ema21 && r > 60) {
+    return "BUY";
+  }
+
+  return "WAIT";
+}
+
+// === TP SL ===
+function getTP_SL(price) {
+  return {
+    tp: price * 1.008,
+    sl: price * 0.996
+  };
+}
+
+// === BACKTEST FIX ===
+async function runBacktest() {
+
+  try {
+
+    document.getElementById("loading").innerText = "Loading data...";
+
+    const res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=500");
+    const raw = await res.json();
+
+    const data = raw.map(c => ({ close: +c[4] }));
+
+    let balance = 1000;
+    let equity = [balance];
+    let wins = 0, losses = 0, trades = 0;
+
+    for (let i = 210; i < data.length - 1; i++) {
+
+      const slice = data.slice(0, i);
+      const signal = analyze(slice);
+
+      if (signal !== "BUY") continue;
+
+      trades++;
+
+      const entry = slice.at(-1).close;
+      const {tp, sl} = getTP_SL(entry);
+
+      const next = data[i+1].close;
+
+      let risk = balance * 0.01;
+
+      if (next >= tp) {
+        balance += risk;
+        wins++;
+      } else if (next <= sl) {
+        balance -= risk;
+        losses++;
+      }
+
+      equity.push(balance);
+    }
+
+    const winrate = trades > 0 ? (wins / trades * 100).toFixed(2) : 0;
+
+    document.getElementById("result").innerHTML = `
+    Balance: $${balance.toFixed(2)}<br>
+    Trades: ${trades}<br>
+    Winrate: ${winrate}%<br>
+    Wins: ${wins} | Loss: ${losses}
+    `;
+
+    drawChart(equity);
+
+    document.getElementById("loading").innerText = "Done ";
+
+  } catch (e) {
+    alert("Error: " + e);
+  }
+}
+
+// === CHART ===
+function drawChart(data) {
+  const canvas = document.getElementById("chart");
+  const ctx = canvas.getContext("2d");
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  const max = Math.max(...data);
+  const min = Math.min(...data);
+
+  const stepX = canvas.width / data.length;
+
+  ctx.beginPath();
+
+  data.forEach((val, i) => {
+    const x = i * stepX;
+    const y = canvas.height - ((val - min)/(max-min))*canvas.height;
+
+    if(i===0) ctx.moveTo(x,y);
+    else ctx.lineTo(x,y);
+  });
+
+  ctx.strokeStyle = "#22c55e";
+  ctx.stroke();
+}
+
+// === START BOT ===
+function startBot() {
+  document.getElementById("status").innerText = "RUNNING ";
+}
+
+</script>
+
+</body>
+</html>
