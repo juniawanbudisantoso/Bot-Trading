@@ -1,8 +1,9 @@
+
 <!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI HEDGE FUND BOT ELITE</title>
+<title>AI BOT STABLE FINAL</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -18,140 +19,85 @@ button { padding:15px; margin:10px; width:85%; border-radius:10px; border:none; 
 
 <body>
 
-<h1>🚀 AI HEDGE FUND BOT ELITE</h1>
-<p id="status">Status: OFF</p>
+<h1>🤖 AI BOT STABLE</h1>
 
-<button onclick="startBot()">START BOT</button>
 <button onclick="runBacktest()">RUN BACKTEST</button>
 
-<div id="output"></div>
-
-<h3>📊 Equity Curve</h3>
 <canvas id="chart"></canvas>
-
-<h3>📈 Result</h3>
 <div id="result"></div>
 
 <script>
 
-// ===== MODEL (PERSISTENT AI) =====
-let MODEL = JSON.parse(localStorage.getItem("model")) || {
-  w: [0.5, -0.3, 0.2, 0.1, 0.4, 0.3],
+// ===== RESET MODEL (ANTI RUSAK) =====
+let MODEL = {
+  w: [0.3, -0.2, 0.2, 0.1],
   lr: 0.01
 };
 
-function saveModel(){
-  localStorage.setItem("model", JSON.stringify(MODEL));
+// ===== FETCH =====
+async function fetchData(){
+  let res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=300");
+  let d = await res.json();
+  return d.map(x=>({
+    close:+x[4],
+    high:+x[2],
+    low:+x[3]
+  }));
 }
 
-// ===== FETCH DATA =====
-async function fetchOHLC(symbol){
-  try{
-    let res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=200`);
-    let data = await res.json();
-
-    return data.map(c => ({
-      close: parseFloat(c[4]),
-      high: parseFloat(c[2]),
-      low: parseFloat(c[3])
-    }));
-  } catch(e){
-    console.log("API ERROR → fallback");
-    return Array.from({length:200},()=>({
-      close: 50000+Math.random()*1000,
-      high: 51000,
-      low: 49000
-    }));
-  }
+// ===== INDICATOR =====
+function ema(d,p){
+  let k=2/(p+1), e=d[0];
+  return d.map(v=>e=v*k+e*(1-k));
 }
 
-// ===== INDICATORS =====
-function ema(data,p){
-  let k=2/(p+1), e=data[0];
-  return data.map(v=>e=v*k+e*(1-k));
-}
-
-function rsi(data,p=14){
+function rsi(d){
   let g=0,l=0;
-  for(let i=1;i<p;i++){
-    let d=data[i]-data[i-1];
-    if(d>0) g+=d; else l-=d;
+  for(let i=1;i<14;i++){
+    let x=d[i]-d[i-1];
+    if(x>0) g+=x; else l-=x;
   }
-  g/=p; l/=p;
   let rs=g/(l||1);
   return 100-(100/(1+rs));
 }
 
-function atr(data){
-  let sum=0;
-  for(let i=1;i<data.length;i++){
-    sum += Math.abs(data[i].high-data[i].low);
+function atr(d){
+  let s=0;
+  for(let i=1;i<d.length;i++){
+    s+=Math.abs(d[i].high-d[i].low);
   }
-  return sum/data.length;
+  return s/d.length;
 }
 
-// ===== MARKET STRUCTURE =====
-function marketStructure(data){
-  let highs = data.map(d=>d.high);
-  let lows = data.map(d=>d.low);
+// ===== FEATURE (FIXED) =====
+function feat(d){
 
-  let lastHigh = Math.max(...highs.slice(-10));
-  let prevHigh = Math.max(...highs.slice(-20,-10));
+  let c=d.map(x=>x.close);
 
-  let lastLow = Math.min(...lows.slice(-10));
-  let prevLow = Math.min(...lows.slice(-20,-10));
+  let e9=ema(c,9).at(-1);
+  let e21=ema(c,21).at(-1);
 
-  if(lastHigh > prevHigh && lastLow > prevLow) return 1;
-  if(lastHigh < prevHigh && lastLow < prevLow) return -1;
-  return 0;
-}
+  let trend = (e9 - e21) / e21;
+  let momentum = (c.at(-1)-c.at(-5)) / c.at(-5);
+  let r = (rsi(c)-50)/50;
+  let v = atr(d)/c.at(-1);
 
-// ===== MOMENTUM =====
-function momentumStrength(data){
-  let closes = data.map(d=>d.close);
-  return (closes.at(-1) - closes.at(-10))/100;
-}
-
-// ===== FEATURE =====
-function features(data){
-
-  let closes = data.map(x=>x.close);
-
-  let ema9 = ema(closes,9).at(-1);
-  let ema21 = ema(closes,21).at(-1);
-
-  let trend = ema9 - ema21;
-  let r = rsi(closes);
-  let vol = atr(data);
-
-  let structure = marketStructure(data);
-  let momentum = momentumStrength(data);
-
-  return [
-    trend/100,
-    (r-50)/50,
-    vol/100,
-    closes.at(-1)/10000,
-    structure,
-    momentum
-  ];
+  return [trend, momentum, r, v];
 }
 
 // ===== AI =====
 function predict(x){
   let z = MODEL.w.reduce((s,w,i)=>s+w*x[i],0);
-  return 1/(1+Math.exp(-z));
+  let p = 1/(1+Math.exp(-z));
+
+  return Math.max(0.05, Math.min(0.95,p)); // anti 0 / 1
 }
 
 function train(x,y){
   let p = predict(x);
   let err = y - p;
 
-  for(let i=0;i<MODEL.w.length;i++){
-    MODEL.w[i] += MODEL.lr * err * x[i];
-  }
-
-  saveModel();
+  MODEL.w = MODEL.w.map((w,i)=>w + MODEL.lr * err * x[i]);
 }
 
 // ===== DECISION =====
@@ -161,125 +107,62 @@ function decide(p){
   return "WAIT";
 }
 
-// ===== LIVE BOT =====
-let running=false;
-
-async function startBot(){
-  running=true;
-  document.getElementById("status").innerText="RUNNING 🚀";
-
-  while(running){
-
-    let symbols=["BTCUSDT","ETHUSDT"];
-    let html="";
-
-    for(let s of symbols){
-
-      let data=await fetchOHLC(s);
-      let x=features(data);
-      let p=predict(x);
-      let signal=decide(p);
-
-      let price=data.at(-1).close;
-
-      let cls = signal=="BUY"?"buy":signal=="SELL"?"sell":"wait";
-
-      html += `
-      <div class="card">
-        <b>${s}</b><br>
-        <span class="${cls}">${signal}</span><br>
-        Prob: ${p.toFixed(2)}<br>
-        Price: ${price}
-      </div>`;
-    }
-
-    document.getElementById("output").innerHTML=html;
-
-    await new Promise(r=>setTimeout(r,5000));
-  }
-}
-
 // ===== BACKTEST =====
 async function runBacktest(){
 
-  let data = await fetchOHLC("BTCUSDT");
+  let data = await fetchData();
 
-  let balance=1000;
-  let equity=[balance];
+  let balance = 1000;
+  let equity = [balance];
 
-  let wins=0,total=0;
+  let win=0, total=0;
 
-  for(let i=50;i<data.length-10;i++){
+  for(let i=50;i<data.length-5;i++){
 
-    let slice=data.slice(i-50,i);
-    let x=features(slice);
-    let p=predict(x);
-    let signal=decide(p);
+    let slice = data.slice(i-50,i);
 
-    let entry=data[i].close;
-    let atrVal = atr(slice);
+    let x = feat(slice);
 
-    let tp, sl;
+    // 🔥 FILTER SIDEWAYS
+    if(Math.abs(x[0]) < 0.0003) continue;
 
-    if(signal=="BUY"){
-      tp = entry + atrVal*1.5;
-      sl = entry - atrVal;
+    let p = predict(x);
+    let signal = decide(p);
+
+    if(signal=="WAIT") continue;
+
+    let entry = data[i].close;
+    let next = data[i+1].close;
+
+    let result = 0;
+
+    if(signal=="BUY" && next > entry) result = 1;
+    if(signal=="SELL" && next < entry) result = 1;
+
+    total++;
+
+    if(result){
+      balance *= 1.01;
+      win++;
+    } else {
+      balance *= 0.99;
     }
 
-    if(signal=="SELL"){
-      tp = entry - atrVal*1.5;
-      sl = entry + atrVal;
-    }
-
-    let result="LOSS";
-
-    for(let j=1;j<=10;j++){
-      let price=data[i+j].close;
-
-      if(signal=="BUY"){
-        if(price>=tp){ result="WIN"; break;}
-        if(price<=sl){ break;}
-      }
-
-      if(signal=="SELL"){
-        if(price<=tp){ result="WIN"; break;}
-        if(price>=sl){ break;}
-      }
-    }
-
-    if(signal!="WAIT"){
-      total++;
-
-      if(result=="WIN"){
-        balance*=1.02;
-        wins++;
-        train(x,1);
-      } else {
-        balance*=0.98;
-        train(x,0);
-      }
-    }
+    train(x,result);
 
     equity.push(balance);
   }
 
-  let winrate=(wins/total*100).toFixed(2);
+  let wr = (win/total*100).toFixed(2);
 
-  document.getElementById("result").innerHTML=
-    `Balance: $${balance.toFixed(2)}<br>
-     Winrate: ${winrate}%<br>
-     Trades: ${total}`;
+  document.getElementById("result").innerHTML =
+    `Balance: $${balance.toFixed(2)}<br>Winrate: ${wr}%<br>Trades: ${total}`;
 
-  drawChart(equity);
-}
-
-// ===== CHART =====
-function drawChart(data){
   new Chart(document.getElementById("chart"),{
     type:"line",
     data:{
-      labels:data.map((_,i)=>i),
-      datasets:[{label:"Equity",data:data}]
+      labels:equity.map((_,i)=>i),
+      datasets:[{data:equity,label:"Equity"}]
     }
   });
 }
