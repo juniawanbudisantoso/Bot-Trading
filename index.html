@@ -1,8 +1,8 @@
-<!DOCTYPE html>
+    <!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI REAL TRADING ENGINE</title>
+<title>AI REAL TRADING BOT FINAL</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -14,9 +14,9 @@ button { padding:15px; margin:10px; width:85%; border-radius:10px; border:none; 
 
 <body>
 
-<h1>🚀 AI REAL TRADING ENGINE</h1>
+<h1>🚀 AI REAL TRADING BOT FINAL</h1>
 
-<button onclick="run()">RUN AI OPTIMIZATION</button>
+<button onclick="run()">RUN OPTIMIZATION</button>
 
 <canvas id="chart"></canvas>
 <div id="result"></div>
@@ -25,14 +25,15 @@ button { padding:15px; margin:10px; width:85%; border-radius:10px; border:none; 
 
 // ===== LOAD MODEL =====
 let MODEL = JSON.parse(localStorage.getItem("model")) || {
-  w: [0.3, 0.2, -0.2, 0.1],
+  w: [0.3, 0.2, -0.2, 0.1, 0.2],
   lr: 0.01
 };
 
 // ===== FETCH DATA =====
 async function fetchData(){
-  let res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=500");
+  let res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=600");
   let d = await res.json();
+
   return d.map(x=>({
     close:+x[4],
     high:+x[2],
@@ -101,6 +102,7 @@ function train(x,y){
   for(let i=0;i<MODEL.w.length;i++){
     MODEL.w[i] += MODEL.lr * err * x[i];
 
+    // clamp
     if(MODEL.w[i] > 5) MODEL.w[i] = 5;
     if(MODEL.w[i] < -5) MODEL.w[i] = -5;
   }
@@ -113,14 +115,14 @@ function decide(p){
   return "WAIT";
 }
 
-// ===== BACKTEST ENGINE =====
+// ===== BACKTEST =====
 function simulate(data){
 
   let balance = 1000;
-  let win=0,total=0;
   let equity=[balance];
+  let win=0,total=0;
 
-  for(let i=60;i<data.length-10;i++){
+  for(let i=60;i<data.length-15;i++){
 
     let slice=data.slice(i-60,i);
     let x=feat(slice);
@@ -130,10 +132,20 @@ function simulate(data){
 
     if(signal=="WAIT") continue;
 
+    // ===== FILTER =====
+    let e50 = ema(slice.map(x=>x.close),50).at(-1);
+    let last = slice.at(-1).close;
+
+    if(signal=="BUY" && last < e50) continue;
+    if(signal=="SELL" && last > e50) continue;
+
+    if(atr(slice)/last < 0.001) continue;
+
+    // ===== ENTRY =====
     let entry=data[i].close;
     let atrv=atr(slice);
 
-    let sl, tp;
+    let sl,tp;
 
     if(signal=="BUY"){
       sl=entry-atrv*1.5;
@@ -145,7 +157,7 @@ function simulate(data){
 
     let result=0;
 
-    for(let j=i+1;j<i+8;j++){
+    for(let j=i+1;j<i+15;j++){
       let price=data[j].close;
 
       if(signal=="BUY"){
@@ -159,7 +171,9 @@ function simulate(data){
 
     total++;
 
-    let risk=0.02;
+    // ===== DYNAMIC RISK =====
+    let conf = Math.abs(p-0.5)*2;
+    let risk = 0.01 + conf*0.03;
 
     if(result){
       balance*=1+risk;
@@ -181,26 +195,30 @@ function simulate(data){
   };
 }
 
-// ===== OPTIMIZATION LOOP =====
+// ===== OPTIMIZATION =====
 async function run(){
 
   let data=await fetchData();
 
   let best=null;
 
-  for(let k=0;k<10;k++){
-
-    // mutate model
-    MODEL.w = MODEL.w.map(w=>w + (Math.random()-0.5)*0.2);
+  for(let k=0;k<8;k++){
 
     let res = simulate(data);
 
     if(!best || res.balance > best.balance){
-      best = {...res, model:JSON.parse(JSON.stringify(MODEL))};
+      best = {
+        ...res,
+        model: JSON.parse(JSON.stringify(MODEL))
+      };
+    }
+
+    // improve model toward best
+    if(best){
+      MODEL.w = MODEL.w.map((w,i)=> w + (best.model.w[i]-w)*0.3);
     }
   }
 
-  MODEL = best.model;
   localStorage.setItem("model", JSON.stringify(MODEL));
 
   document.getElementById("result").innerHTML =
