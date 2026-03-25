@@ -2,19 +2,23 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI BOT FIX FINAL</title>
+<title>AI HEDGE FUND BOT ELITE</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
 body { font-family: Arial; background:#0b132b; color:white; text-align:center; }
 button { padding:15px; margin:10px; width:85%; border-radius:10px; border:none; font-size:18px; }
+.card { background:#1c2541; padding:15px; margin:10px; border-radius:10px; }
+.buy { color:lime; }
+.sell { color:red; }
+.wait { color:orange; }
 </style>
 </head>
 
 <body>
 
-<h1>🤖 AI BOT FIX FINAL</h1>
+<h1>🚀 AI HEDGE FUND BOT ELITE</h1>
 
 <button onclick="runBacktest()">RUN BACKTEST</button>
 
@@ -23,16 +27,17 @@ button { padding:15px; margin:10px; width:85%; border-radius:10px; border:none; 
 
 <script>
 
-// ===== MODEL (RESET BERSIH) =====
+// ================= MODEL =================
 let MODEL = {
   w: [0.2, 0.2, -0.2, 0.1],
   lr: 0.01
 };
 
-// ===== FETCH DATA =====
+// ================= FETCH =================
 async function fetchData(){
-  let res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=300");
+  let res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=400");
   let d = await res.json();
+
   return d.map(x=>({
     close:+x[4],
     high:+x[2],
@@ -40,31 +45,44 @@ async function fetchData(){
   }));
 }
 
-// ===== INDICATOR =====
+// ================= INDICATOR =================
 function ema(d,p){
   let k=2/(p+1), e=d[0];
   return d.map(v=>e=v*k+e*(1-k));
 }
 
-function rsi(d){
-  let g=0,l=0;
-  for(let i=1;i<14;i++){
-    let x=d[i]-d[i-1];
-    if(x>0) g+=x; else l-=x;
+function rsi(d,p=14){
+  let gains=0, losses=0;
+
+  for(let i=1;i<=p;i++){
+    let diff = d[i] - d[i-1];
+    if(diff>0) gains+=diff;
+    else losses-=diff;
   }
-  let rs=g/(l||1);
-  return 100-(100/(1+rs));
+
+  gains/=p;
+  losses/=p;
+
+  let rs = gains/(losses||1);
+  return 100 - (100/(1+rs));
 }
 
-function atr(d){
-  let s=0;
+function atr(d,p=14){
+  let trs=[];
+
   for(let i=1;i<d.length;i++){
-    s+=Math.abs(d[i].high-d[i].low);
+    let tr = Math.max(
+      d[i].high - d[i].low,
+      Math.abs(d[i].high - d[i-1].close),
+      Math.abs(d[i].low - d[i-1].close)
+    );
+    trs.push(tr);
   }
-  return s/d.length;
+
+  return trs.slice(-p).reduce((a,b)=>a+b,0)/p;
 }
 
-// ===== FEATURE (NORMALIZED FIX) =====
+// ================= FEATURE =================
 function feat(d){
 
   let c=d.map(x=>x.close);
@@ -80,13 +98,12 @@ function feat(d){
   return [trend, momentum, r, vol];
 }
 
-// ===== AI =====
+// ================= AI =================
 function predict(x){
   let z = MODEL.w.reduce((s,w,i)=>s+w*x[i],0);
   let p = 1/(1+Math.exp(-z));
 
-  // 🔥 anti collapse
-  return Math.max(0.05, Math.min(0.95, p));
+  return Math.max(0.05, Math.min(0.95, p)); // anti collapse
 }
 
 function train(x,y){
@@ -95,17 +112,26 @@ function train(x,y){
 
   for(let i=0;i<MODEL.w.length;i++){
     MODEL.w[i] += MODEL.lr * err * x[i];
+
+    // clamp biar stabil
+    if(MODEL.w[i] > 5) MODEL.w[i] = 5;
+    if(MODEL.w[i] < -5) MODEL.w[i] = -5;
   }
 }
 
-// ===== DECISION =====
+// ================= DECISION =================
 function decide(p){
-  if(p > 0.6) return "BUY";
-  if(p < 0.4) return "SELL";
+  if(p > 0.62) return "BUY";
+  if(p < 0.38) return "SELL";
   return "WAIT";
 }
 
-// ===== BACKTEST =====
+// ================= CONFIDENCE =================
+function confidence(p){
+  return Math.abs(p - 0.5) * 2; // 0 - 1
+}
+
+// ================= BACKTEST =================
 async function runBacktest(){
 
   let data = await fetchData();
@@ -120,12 +146,16 @@ async function runBacktest(){
     let slice = data.slice(i-50,i);
     let x = feat(slice);
 
-    // 🔥 FILTER MARKET FLAT
-    if(Math.abs(x[0]) < 0.0003) continue;
+    // ===== FILTER NO TRADE =====
+    if(Math.abs(x[0]) < 0.0004) continue; // trend lemah
+    if(Math.abs(x[1]) < 0.0003) continue; // momentum lemah
 
     let p = predict(x);
-    let signal = decide(p);
+    let conf = confidence(p);
 
+    if(conf < 0.2) continue; // 🔥 confidence filter
+
+    let signal = decide(p);
     if(signal=="WAIT") continue;
 
     let entry = data[i].close;
@@ -138,11 +168,14 @@ async function runBacktest(){
 
     total++;
 
+    // ===== RISK MANAGEMENT =====
+    let risk = 0.01 + conf * 0.02; // dynamic risk 1%-3%
+
     if(result){
-      balance *= 1.01;
+      balance *= (1 + risk);
       win++;
     } else {
-      balance *= 0.99;
+      balance *= (1 - risk);
     }
 
     train(x,result);
@@ -150,10 +183,12 @@ async function runBacktest(){
     equity.push(balance);
   }
 
-  let wr = (win/total*100).toFixed(2);
+  let wr = total ? (win/total*100).toFixed(2) : 0;
 
   document.getElementById("result").innerHTML =
-    `Balance: $${balance.toFixed(2)}<br>Winrate: ${wr}%<br>Trades: ${total}`;
+    `Balance: $${balance.toFixed(2)}<br>
+     Winrate: ${wr}%<br>
+     Trades: ${total}`;
 
   new Chart(document.getElementById("chart"),{
     type:"line",
